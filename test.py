@@ -12,16 +12,25 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.compose import ColumnTransformer
 from xgboost import XGBRegressor
-from sklearn.model_selection import train_test_split
+import joblib
+import os
 
 st.set_page_config(page_title="🏏 T20 Score Predictor", layout="wide")
 st.title("🏏 T20 Cricket Score Predictor")
 
 # ----------------------
-# Load dataset
+# Load or train model
 # ----------------------
-uploaded_file = st.file_uploader("Upload CSV", type="csv")
-if uploaded_file:
+MODEL_PATH = "t20_pipeline.joblib"
+if os.path.exists(MODEL_PATH):
+    pipeline = joblib.load(MODEL_PATH)
+    final_feats = pipeline.named_steps['pre'].transformers_[0][2] + \
+                  pipeline.named_steps['pre'].transformers_[1][2]
+else:
+    st.warning("No trained model found. Please upload dataset to train.")
+
+uploaded_file = st.file_uploader("Upload CSV to train model", type="csv")
+if uploaded_file and not os.path.exists(MODEL_PATH):
     df = pd.read_csv(uploaded_file)
     st.write(df.head())
 
@@ -44,11 +53,10 @@ if uploaded_file:
     y = df[target]
 
     # ----------------------
-    # Feature selection
+    # Features
     # ----------------------
     drop_cols = ["id", "match_id", "player_id", "date", "time"]
     features = [c for c in df.columns if c != target and c not in drop_cols]
-
     numeric_feats = df[features].select_dtypes(include=[np.number]).columns.tolist()
     cat_feats = [c for c in features if c not in numeric_feats]
     safe_cat_feats = [c for c in cat_feats if df[c].nunique() <= 50]
@@ -56,7 +64,7 @@ if uploaded_file:
     X = df[final_feats]
 
     # ----------------------
-    # Preprocessing + Model
+    # Preprocessor + model
     # ----------------------
     numeric_transformer = Pipeline([
         ("imputer", SimpleImputer(strategy="median")),
@@ -66,79 +74,50 @@ if uploaded_file:
         ("imputer", SimpleImputer(strategy="constant", fill_value="missing")),
         ("onehot", OneHotEncoder(handle_unknown="ignore"))
     ])
-
     preprocessor = ColumnTransformer([
         ("num", numeric_transformer, numeric_feats),
         ("cat", categorical_transformer, safe_cat_feats)
     ])
-
     xgb = XGBRegressor(objective="reg:squarederror", random_state=42, n_jobs=-1)
     pipeline = Pipeline([
         ("pre", preprocessor),
         ("xgb", xgb)
     ])
+    pipeline.fit(X, y)
+    joblib.dump(pipeline, MODEL_PATH)
+    st.success("✅ Model trained and saved.")
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    pipeline.fit(X_train, y_train)
-    y_pred = pipeline.predict(X_test)
-    rmse = np.sqrt(np.mean((y_test - y_pred) ** 2))
+# ----------------------
+# Centered Inputs
+# ----------------------
+if pipeline:
+    st.subheader("🏏 Enter Match Details")
+    col1, col2, col3 = st.columns([1,2,1])  # center column for inputs
+    with col2:
+        overs = st.number_input("Overs played (1-20)", min_value=1.0, max_value=20.0, value=10.0)
+        wickets = st.number_input("Wickets lost (0-10)", min_value=0, max_value=10, value=2)
+        run_rate = st.number_input("Current Run Rate", min_value=0.0, value=8.0)
+        opponent_strength = st.slider("Opponent Strength (1-10)", 1, 10, 5)
+        home_away = st.selectbox("Home/Away", ["Home", "Away"])
+        pitch = st.selectbox("Pitch Condition", ["Batting-friendly", "Bowling-friendly", "Balanced"])
+        weather = st.selectbox("Weather", ["Sunny", "Cloudy", "Overcast"])
 
-    # ----------------------
-    # Streamlit Inputs
-    # ----------------------
-    st.sidebar.header("Match Inputs")
-    overs = st.sidebar.number_input("Overs played (1-20)", min_value=1.0, max_value=20.0, value=10.0)
-    wickets = st.sidebar.number_input("Wickets lost (0-10)", min_value=0, max_value=10, value=2)
-    run_rate = st.sidebar.number_input("Current Run Rate", min_value=0.0, value=8.0)
-    opponent_strength = st.sidebar.slider("Opponent Strength (1-10)", 1, 10, 5)
-    home_away = st.sidebar.selectbox("Home/Away", ["Home", "Away"])
-    pitch = st.sidebar.selectbox("Pitch Condition", ["Batting-friendly", "Bowling-friendly", "Balanced"])
-    weather = st.sidebar.selectbox("Weather", ["Sunny", "Cloudy", "Overcast"])
+        # ----------------------
+        # Prediction
+        # ----------------------
+        input_df = pd.DataFrame({
+            "Overs Played": [overs],
+            "Wickets Lost": [wickets],
+            "Run Rate": [run_rate],
+            "Opponent Strength": [opponent_strength],
+            "Home/Away": [home_away],
+            "Pitch Condition": [pitch],
+            "Weather": [weather]
+        })
+        # Fill missing columns
+        for col in final_feats:
+            if col not in input_df.columns:
+                input_df[col] = 0
 
-    input_df = pd.DataFrame({
-        "Overs Played": [overs],
-        "Wickets Lost": [wickets],
-        "Run Rate": [run_rate],
-        "Opponent Strength": [opponent_strength],
-        "Home/Away": [home_away],
-        "Pitch Condition": [pitch],
-        "Weather": [weather]
-    })
-
-    # Ensure all numeric/categorical columns exist
-    for col in final_feats:
-        if col not in input_df.columns:
-            input_df[col] = 0  # default for numeric missing cols
-
-    pred_score = pipeline.predict(input_df)[0]
-    st.success(f"🏆 Predicted Final T20 Score: **{pred_score:.1f} runs**")
-
-    # ----------------------
-    # Visual Dashboard
-    # ----------------------
-    st.subheader("📊 Dashboard Visuals")
-
-    # Run Meter
-    st.bar_chart(pd.DataFrame({"Predicted Score": [pred_score]}))
-
-    # Confidence Range
-    sim_range = np.linspace(pred_score - rmse, pred_score + rmse, 200)
-    fig, ax = plt.subplots()
-    sns.kdeplot(sim_range, fill=True, color="gold", alpha=0.6, ax=ax)
-    ax.axvline(pred_score, color="green", linestyle="--", label="Predicted Score")
-    ax.axvspan(pred_score - rmse, pred_score + rmse, color="lightgreen", alpha=0.3, label="±RMSE")
-    ax.set_title("🎯 Confidence Range")
-    ax.set_xlabel("Possible Scores")
-    ax.legend()
-    st.pyplot(fig)
-
-    # Projected Run Curve
-    overs_list = np.arange(overs, 21)
-    avg_rpo = pred_score / 20
-    curve = [run_rate * overs] + [avg_rpo * o for o in range(int(overs) + 1, 21)]
-    fig2, ax2 = plt.subplots()
-    ax2.plot(range(1, len(curve) + 1), curve, color="orange", marker="o")
-    ax2.set_title("📈 Projected Run Curve")
-    ax2.set_xlabel("Overs")
-    ax2.set_ylabel("Runs")
-    st.pyplot(fig2)
+        pred_score = pipeline.predict(input_df)[0]
+        st.markdown(f"<h2 style='text-align: center;'>🏆 Predicted Final T20 Score: {pred_score:.1f} runs</h2>", unsafe_allow_html=True)
