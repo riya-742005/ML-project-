@@ -18,7 +18,6 @@ import os
 st.set_page_config(page_title="🏏 T20 Score Predictor", layout="wide")
 st.title("🏏 T20 Cricket Score Predictor")
 
-# Initialize
 pipeline = None
 final_feats = []
 
@@ -38,9 +37,6 @@ if uploaded_file and not os.path.exists(MODEL_PATH):
     df = pd.read_csv(uploaded_file)
     st.write(df.head())
 
-    # ----------------------
-    # Detect target
-    # ----------------------
     target_candidates = ["score", "runs", "total_runs", "predicted_score", "target"]
     target = None
     for t in target_candidates:
@@ -56,9 +52,6 @@ if uploaded_file and not os.path.exists(MODEL_PATH):
     df = df[df[target].notna()].reset_index(drop=True)
     y = df[target]
 
-    # ----------------------
-    # Features
-    # ----------------------
     drop_cols = ["id", "match_id", "player_id", "date", "time"]
     features = [c for c in df.columns if c != target and c not in drop_cols]
     numeric_feats = df[features].select_dtypes(include=[np.number]).columns.tolist()
@@ -67,9 +60,6 @@ if uploaded_file and not os.path.exists(MODEL_PATH):
     final_feats = numeric_feats + safe_cat_feats
     X = df[final_feats]
 
-    # ----------------------
-    # Preprocessor + model
-    # ----------------------
     numeric_transformer = Pipeline([
         ("imputer", SimpleImputer(strategy="median")),
         ("scaler", StandardScaler())
@@ -121,8 +111,33 @@ if pipeline:
                 input_df[col] = 0
 
         pred_score = pipeline.predict(input_df)[0]
-
         st.markdown(f"<h2 style='text-align: center;'>🏆 Predicted Final T20 Score: {pred_score:.1f} runs</h2>", unsafe_allow_html=True)
+
+        # ----------------------
+        # Commentary & Detail Box
+        # ----------------------
+        def commentary_text(score):
+            if score < 100:
+                return "😬 Struggling innings! The batting side is in trouble."
+            elif score < 150:
+                return "⚖️ Balanced play — acceleration needed in final overs."
+            elif score < 190:
+                return "🔥 Strong innings! Competitive total expected."
+            else:
+                return "💥 Explosive batting expected — fireworks incoming!"
+
+        def score_details(score):
+            if score < 100:
+                return "The batting team needs major improvement; likely a low-scoring match."
+            elif score < 150:
+                return "The score is moderate; the team should accelerate to post a competitive total."
+            elif score < 190:
+                return "A strong total is achievable; bowlers will need to work hard to restrict runs."
+            else:
+                return "An excellent total is projected; the batting team dominates the game."
+
+        st.info(f"🎤 Commentary: {commentary_text(pred_score)}")
+        st.success(f"ℹ️ Details: {score_details(pred_score)}")
 
         # ----------------------
         # Fast Dashboard Visuals
@@ -130,10 +145,8 @@ if pipeline:
         st.subheader("📊 Dashboard Visuals")
         col1, col2, col3 = st.columns([1,2,1])
         with col2:
-            # Run meter
             st.bar_chart(pd.DataFrame({"Predicted Score": [pred_score]}))
 
-            # Confidence Range
             y_pred = pipeline.predict(pd.DataFrame(X)) if 'X' in locals() else np.array([pred_score])
             rmse = np.sqrt(np.mean((y_pred - np.mean(y_pred))**2))
             sim_range = np.linspace(pred_score - rmse, pred_score + rmse, 100)
@@ -142,7 +155,6 @@ if pipeline:
             ax.axvline(pred_score, color="green", linestyle="--", label="Predicted Score")
             st.pyplot(fig)
 
-            # Projected Run Curve
             overs_list = np.arange(int(overs), 21)
             avg_rpo = pred_score / 20
             curve = [run_rate * overs] + [avg_rpo * o for o in range(int(overs)+1, 21)]
