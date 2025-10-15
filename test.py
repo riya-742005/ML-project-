@@ -21,8 +21,10 @@ st.title("🏏 T20 Cricket Score Predictor")
 # ----------------------
 # Load dataset
 # ----------------------
-DATA_PATH = "D:\ml_project\t20_cricket_match_score_prediction.csv"  # replace with your CSV path
-df = pd.read_csv(DATA_PATH)
+uploaded_file = st.file_uploader("Upload CSV", type="csv")
+if uploaded_file:
+    df = pd.read_csv(uploaded_file)
+    st.write(df.head())
 
 # ----------------------
 # Detect target
